@@ -96,6 +96,47 @@ The LiveKit worker reads `LIVEKIT_*` model settings so it can coexist with the o
 For inbound calls to a LiveKit phone number, the worker can answer once your LiveKit number is routed to the agent via a dispatch rule.
 For outbound PSTN calls, LiveKit still requires an outbound SIP trunk ID in addition to your LiveKit project credentials.
 
+### LiveKit inbound run
+
+This path does not need `ngrok`.
+
+Minimum `.env` values for the LiveKit worker:
+
+- `LIVEKIT_URL` or `LIVEKIT_WS_URL`
+- `LIVEKIT_API_KEY`
+- `LIVEKIT_API_SECRET`
+- `DEEPGRAM_API_KEY`
+- `GROQ_API_KEY`
+- `ELEVENLABS_API_KEY`
+
+Recommended LiveKit-specific model settings:
+
+- `LIVEKIT_DEEPGRAM_MODEL=nova-3`
+- `LIVEKIT_DEEPGRAM_LANGUAGE=pt-BR`
+- `LIVEKIT_LLM_MODEL=llama-3.3-70b-versatile`
+- `LIVEKIT_ELEVENLABS_MODEL_ID=eleven_flash_v2_5`
+- `LIVEKIT_ELEVENLABS_VOICE_ID=G7ILShrCNLfmS0A37SXS`
+
+Run the worker:
+
+```bash
+.venv/bin/python livekit_ptbr_agent.py download-files
+.venv/bin/python livekit_ptbr_agent.py dev
+```
+
+Then in LiveKit:
+
+- attach your LiveKit phone number to a dispatch rule
+- set the dispatch rule's `Agent name` to `shuo-ptbr-telephony` unless you override `LIVEKIT_AGENT_NAME`
+
+Then call the LiveKit phone number from your phone.
+
+Notes:
+
+- If `download-files` was skipped, the worker falls back to VAD-only turn handling.
+- With the files downloaded, the worker uses `MultilingualModel()` plus adaptive interruption handling.
+- The outbound helper is optional and only needed for PSTN calls initiated by the agent.
+
 ## Tests
 Running these tests is not required for executing the application.
 It is recommended to run tests after making changes to the codebase.
