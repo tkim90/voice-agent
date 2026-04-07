@@ -1,28 +1,42 @@
 """
-ElevenLabs Text-to-Speech service with WebSocket streaming.
+ElevenLabs Text-to-Speech service.
+
+This implementation uses ElevenLabs' HTTP streaming endpoint rather than the
+WebSocket API. In this app, the full assistant turn is available by the time
+TTS starts, and the HTTP stream is materially more reliable for that pattern.
 """
 
 import os
-import json
+import base64
 import asyncio
+import json
 from typing import Optional, Callable, Awaitable
 
-import websockets
-from websockets.client import WebSocketClientProtocol
+import httpx
 
 from ..log import ServiceLogger
 
 log = ServiceLogger("TTS")
 
+TWILIO_FRAME_BYTES = 160  # 20ms of ulaw_8000 mono audio
+
+
+def _preview(text: str, limit: int = 80) -> str:
+    """Compact preview for logs."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
 
 class TTSService:
     """
     ElevenLabs streaming TTS service.
-    
-    Sends text chunks, receives audio chunks via callback.
-    Audio is returned as base64-encoded mulaw at 8kHz for Twilio.
+
+    Buffers text during LLM generation, then streams ulaw_8000 audio over HTTP
+    on flush(). Audio is reframed into Twilio-friendly 20ms chunks.
     """
-    
+
     def __init__(
         self,
         on_audio: Callable[[str], Awaitable[None]],
@@ -30,17 +44,25 @@ class TTSService:
     ):
         self._on_audio = on_audio
         self._on_done = on_done
-        
-        self._ws: Optional[WebSocketClientProtocol] = None
-        self._receive_task: Optional[asyncio.Task] = None
+
+        self._client: Optional[httpx.AsyncClient] = None
+        self._stream_task: Optional[asyncio.Task] = None
         self._running = False
-        
+
         self._api_key = os.getenv("ELEVENLABS_API_KEY", "")
         self._voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
-    
+        self._model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
+
+        self._pending_text = ""
+        self._sent_chunks = 0
+        self._sent_chars = 0
+        self._received_audio_chunks = 0
+        self._received_byte_chunks = 0
+        self._last_text_preview = ""
+
     @property
     def is_active(self) -> bool:
-        return self._running and self._ws is not None
+        return self._running and self._client is not None
 
     def bind(
         self,
@@ -50,142 +72,212 @@ class TTSService:
         """Rebind callbacks (used by connection pool to assign per-turn handlers)."""
         self._on_audio = on_audio
         self._on_done = on_done
-    
+        self._pending_text = ""
+        self._sent_chunks = 0
+        self._sent_chars = 0
+        self._received_audio_chunks = 0
+        self._received_byte_chunks = 0
+        self._last_text_preview = ""
+
     async def start(self) -> None:
-        """Open WebSocket connection to ElevenLabs."""
+        """Prepare an HTTP client for this turn."""
         if self._running:
             return
-        
-        url = (
-            f"wss://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream-input?"
-            f"model_id=eleven_turbo_v2_5&"
-            f"output_format=ulaw_8000"
-        )
-        
-        try:
-            self._ws = await websockets.connect(url)
-            self._running = True
 
-            # Log ElevenLabs region (expect "Netherlands" from DE)
-            # websockets v15: response headers live on ws.response.headers
-            resp = getattr(self._ws, "response", None)
-            hdrs = getattr(resp, "headers", {}) if resp else {}
-            region = hdrs.get("x-region", "unknown")
-            log.info(f"Region: {region}")
-            
-            init_message = {
-                "text": " ",
-                "voice_settings": {
-                    "stability": 0.5,
-                    "similarity_boost": 0.75,
-                },
-                "xi_api_key": self._api_key,
-            }
-            await self._ws.send(json.dumps(init_message))
-            
-            self._receive_task = asyncio.create_task(self._receive_loop())
-            log.connected()
-            
-        except Exception as e:
-            log.error("Connection failed", e)
-            raise
-    
+        self._client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=10.0, read=None, write=30.0, pool=10.0),
+            headers={
+                "xi-api-key": self._api_key,
+                "Content-Type": "application/json",
+                "Accept": "application/octet-stream",
+            },
+        )
+        self._running = True
+        self._pending_text = ""
+        self._sent_chunks = 0
+        self._sent_chars = 0
+        self._received_audio_chunks = 0
+        self._received_byte_chunks = 0
+        self._last_text_preview = ""
+
+        log.info(f"HTTP streaming ready ({self._model_id}, voice {self._voice_id[:8]}...)")
+        log.connected()
+
     async def send(self, text: str) -> None:
-        """Send text chunk for synthesis."""
-        if not self._ws or not self._running:
-            return
-        
-        try:
-            message = {
-                "text": text,
-                "try_trigger_generation": True,
-            }
-            await self._ws.send(json.dumps(message))
-        except Exception as e:
-            log.error("Send failed", e)
-    
-    async def flush(self) -> None:
-        """Force synthesis of any buffered text."""
-        if not self._ws or not self._running:
-            return
-        
-        try:
-            message = {
-                "text": "",
-                "flush": True,
-            }
-            await self._ws.send(json.dumps(message))
-        except Exception as e:
-            log.error("Flush failed", e)
-    
-    async def stop(self) -> None:
-        """Close connection gracefully after flushing."""
+        """Buffer text for synthesis."""
         if not self._running:
             return
-        
-        try:
-            await self.flush()
-            await asyncio.sleep(0.2)
-        except Exception as e:
-            log.error("Stop failed", e)
-        finally:
-            await self._cleanup()
-        
+
+        self._pending_text += text
+
+    async def flush(self) -> None:
+        """Start the HTTP audio stream for the buffered text."""
+        if not self._running or not self._client:
+            return
+
+        text = self._pending_text.strip()
+        self._pending_text = ""
+
+        if not text:
+            log.warning("Flush requested before any text was sent to TTS")
+            return
+
+        self._sent_chunks = 1
+        self._sent_chars = len(text)
+        self._last_text_preview = _preview(text)
+
+        log.info(
+            f'Text chunk #1 ({self._sent_chars} chars) [flush]: '
+            f'"{self._last_text_preview}"'
+        )
+        log.info(f"Starting HTTP TTS stream ({self._sent_chars} chars)")
+
+        if self._stream_task and not self._stream_task.done():
+            self._stream_task.cancel()
+            try:
+                await self._stream_task
+            except asyncio.CancelledError:
+                pass
+
+        self._stream_task = asyncio.create_task(self._stream_audio(text))
+
+    async def stop(self) -> None:
+        """Close any active stream gracefully."""
+        if not self._running:
+            return
+
+        if self._stream_task and not self._stream_task.done():
+            try:
+                await self._stream_task
+            except asyncio.CancelledError:
+                pass
+
+        await self._cleanup()
         log.disconnected()
-    
+
     async def cancel(self) -> None:
-        """Abort connection immediately."""
+        """Abort the current stream immediately."""
         self._running = False
+
+        if self._stream_task and not self._stream_task.done():
+            self._stream_task.cancel()
+            try:
+                await self._stream_task
+            except asyncio.CancelledError:
+                pass
+
         await self._cleanup()
         log.cancelled()
-    
+
     async def _cleanup(self) -> None:
         """Clean up resources."""
         self._running = False
-        
-        if self._receive_task:
-            self._receive_task.cancel()
+
+        if self._client:
             try:
-                await self._receive_task
-            except asyncio.CancelledError:
-                pass
-            self._receive_task = None
-        
-        if self._ws:
-            try:
-                await self._ws.close()
+                await self._client.aclose()
             except Exception:
                 pass
-            self._ws = None
-    
-    async def _receive_loop(self) -> None:
-        """Background task to receive audio chunks."""
+            self._client = None
+
+        self._stream_task = None
+
+    async def _stream_audio(self, text: str) -> None:
+        """Fetch streaming audio from ElevenLabs and forward framed chunks."""
+        if not self._client:
+            return
+
+        url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._voice_id}/stream"
+        params = {"output_format": "ulaw_8000"}
+        payload = {
+            "text": text,
+            "model_id": self._model_id,
+            "voice_settings": {
+                "stability": 0.5,
+                "similarity_boost": 0.75,
+                "use_speaker_boost": False,
+                "speed": 1.0,
+            },
+        }
+
+        remainder = b""
+
         try:
-            while self._running and self._ws:
-                try:
-                    message = await self._ws.recv()
-                    await self._handle_message(message)
-                except websockets.exceptions.ConnectionClosed:
-                    break
-                except Exception as e:
-                    log.error("Receive failed", e)
-                    break
-        finally:
+            async with self._client.stream("POST", url, params=params, json=payload) as response:
+                if response.status_code >= 400:
+                    body = (await response.aread()).decode("utf-8", errors="replace")
+                    guidance = None
+                    try:
+                        parsed = json.loads(body)
+                        detail = parsed.get("detail", {})
+                        if (
+                            response.status_code == 402
+                            and detail.get("code") == "paid_plan_required"
+                        ):
+                            guidance = (
+                                "Configured ELEVENLABS_VOICE_ID requires a paid plan. "
+                                "Free-tier API use is blocked for many Voice Library voices. "
+                                "Switch ELEVENLABS_VOICE_ID to a voice you own or a shared "
+                                "voice with free_users_allowed=true, or upgrade ElevenLabs."
+                            )
+                    except json.JSONDecodeError:
+                        pass
+
+                    log.error(
+                        "HTTP TTS request failed "
+                        f"(status={response.status_code}, body={_preview(body, 160)})"
+                    )
+                    if guidance:
+                        log.warning(guidance)
+                    await self._on_done()
+                    return
+
+                async for chunk in response.aiter_bytes():
+                    if not self._running:
+                        break
+
+                    if not chunk:
+                        continue
+
+                    self._received_byte_chunks += 1
+                    remainder += chunk
+
+                    while len(remainder) >= TWILIO_FRAME_BYTES:
+                        frame = remainder[:TWILIO_FRAME_BYTES]
+                        remainder = remainder[TWILIO_FRAME_BYTES:]
+                        await self._emit_audio_frame(frame)
+
+                if self._running and remainder:
+                    await self._emit_audio_frame(remainder)
+
+                if self._running:
+                    if self._received_audio_chunks == 0:
+                        log.warning(
+                            "HTTP TTS stream ended with no audio "
+                            f"(chars={self._sent_chars}, text=\"{self._last_text_preview}\")"
+                        )
+                    else:
+                        log.info(
+                            f"TTS finalized with {self._received_audio_chunks} audio chunks "
+                            f"from {self._received_byte_chunks} byte chunks"
+                        )
+                    await self._on_done()
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            log.error("HTTP TTS stream failed", e)
             if self._running:
-                self._running = False
                 await self._on_done()
-    
-    async def _handle_message(self, message: str) -> None:
-        """Parse and handle ElevenLabs response."""
-        try:
-            data = json.loads(message)
-            
-            if "audio" in data and data["audio"]:
-                audio_base64 = data["audio"]
-                await self._on_audio(audio_base64)
-            
-            if data.get("isFinal", False):
-                await self._on_done()
-            
-        except json.JSONDecodeError:
-            log.error(f"Invalid JSON: {message[:100]}")
+
+    async def _emit_audio_frame(self, frame: bytes) -> None:
+        """Emit one Twilio media payload frame."""
+        self._received_audio_chunks += 1
+        if self._received_audio_chunks == 1:
+            log.info(
+                f"First audio chunk received after {self._sent_chunks} text chunks "
+                f"({self._sent_chars} chars)"
+            )
+
+        payload = base64.b64encode(frame).decode("ascii")
+        await self._on_audio(payload)

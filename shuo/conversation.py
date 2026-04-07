@@ -17,6 +17,7 @@ Events come from:
 
 import json
 import asyncio
+import os
 from typing import Optional
 
 from fastapi import WebSocket
@@ -49,7 +50,8 @@ async def run_conversation_over_twilio(websocket: WebSocket) -> None:
     5. Process events through pure state machine
     6. Dispatch actions inline
     """
-    event_log = Logger(verbose=False)
+    verbose_events = os.getenv("SHUO_VERBOSE_EVENTS", "").lower() in {"1", "true", "yes", "on"}
+    event_log = Logger(verbose=verbose_events)
     event_queue: asyncio.Queue[Event] = asyncio.Queue()
     tracer = Tracer()
 

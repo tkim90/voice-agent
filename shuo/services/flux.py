@@ -37,11 +37,13 @@ class FluxService:
         self._on_interim = on_interim
 
         self._api_key = os.getenv("DEEPGRAM_API_KEY", "")
+        self._log_interim = os.getenv("SHUO_LOG_INTERIM", "").lower() in {"1", "true", "yes", "on"}
         self._client: Optional[AsyncDeepgramClient] = None
         self._connection = None
         self._cm = None
         self._listener_task: Optional[asyncio.Task] = None
         self._running = False
+        self._last_interim = ""
 
     @property
     def is_active(self) -> bool:
@@ -138,7 +140,7 @@ class FluxService:
                 elif event == "StartOfTurn":
                     await self._on_start_of_turn()
 
-            elif msg_type == "Results" and self._on_interim:
+            elif msg_type == "Results":
                 channel = getattr(message, "channel", None)
                 if channel:
                     alternatives = getattr(channel, "alternatives", None)
@@ -150,7 +152,12 @@ class FluxService:
                         )
                         transcript = getattr(alt, "transcript", "")
                         if transcript:
-                            await self._on_interim(transcript.strip())
+                            cleaned = transcript.strip()
+                            if self._log_interim and cleaned and cleaned != self._last_interim:
+                                self._last_interim = cleaned
+                                log.info(f'Interim transcript: "{cleaned}"')
+                            if self._on_interim:
+                                await self._on_interim(cleaned)
 
         except Exception as e:
             log.error("Message handling failed", e)

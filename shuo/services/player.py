@@ -42,6 +42,7 @@ class AudioPlayer:
         self._running = False
         self._index = 0
         self._tts_done = False
+        self._sent_chunks = 0
     
     @property
     def is_playing(self) -> bool:
@@ -56,8 +57,10 @@ class AudioPlayer:
         self._index = 0
         self._running = True
         self._tts_done = False
-        
+        self._sent_chunks = 0
+
         self._task = asyncio.create_task(self._playback_loop())
+        log.info("Playback loop started")
     
     async def send_chunk(self, chunk: str) -> None:
         """Add an audio chunk to the playback queue."""
@@ -97,7 +100,8 @@ class AudioPlayer:
         self._chunks = []
         self._index = 0
         self._tts_done = False
-        
+        self._sent_chunks = 0
+
         await self._send_clear()
     
     async def wait_until_done(self) -> None:
@@ -125,6 +129,7 @@ class AudioPlayer:
             
             if self._running:
                 self._running = False
+                log.info(f"Playback finished after {self._sent_chunks} chunks")
                 if self._on_done:
                     self._on_done()
                 
@@ -136,6 +141,9 @@ class AudioPlayer:
     
     async def _send_audio(self, payload: str) -> None:
         """Send a single audio chunk to Twilio."""
+        self._sent_chunks += 1
+        if self._sent_chunks == 1:
+            log.info("First audio chunk sent to Twilio")
         message = {
             "event": "media",
             "streamSid": self._stream_sid,
@@ -147,6 +155,7 @@ class AudioPlayer:
     
     async def _send_clear(self) -> None:
         """Send clear message to Twilio to flush audio buffer."""
+        log.warning("Sent clear to Twilio; buffered playback dropped")
         message = {
             "event": "clear",
             "streamSid": self._stream_sid

@@ -31,6 +31,14 @@ def _ms_since(t0: float) -> int:
     return int((time.monotonic() - t0) * 1000)
 
 
+def _preview(text: str, limit: int = 80) -> str:
+    """Compact preview for logs."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
 class Agent:
     """
     Self-contained agent response pipeline.
@@ -92,6 +100,10 @@ class Agent:
         if self._active:
             await self.cancel_turn()
 
+        log.info(
+            f"User transcript ready for LLM ({len(transcript)} chars): "
+            f'"{_preview(transcript)}"'
+        )
         self._active = True
         self._t0 = time.monotonic()
         self._got_first_token = False
@@ -173,7 +185,9 @@ class Agent:
         """LLM finished -> flush TTS."""
         if not self._active or not self._tts:
             return
+        self._tracer.mark(self._turn, "llm_done")
         self._tracer.end(self._turn, "llm")
+        log.info(f"LLM stream complete  +{_ms_since(self._t0)}ms  -> flushing TTS")
         await self._tts.flush()
 
     async def _on_tts_audio(self, audio_base64: str) -> None:
@@ -196,7 +210,13 @@ class Agent:
         """TTS finished -> tell player no more chunks coming."""
         if not self._active or not self._player:
             return
+        self._tracer.mark(self._turn, "tts_done")
         self._tracer.end(self._turn, "tts")
+        if not self._got_first_audio:
+            self._tracer.mark(self._turn, "tts_done_no_audio")
+            log.warning("TTS completed without producing audio")
+        else:
+            log.info(f"TTS stream complete  +{_ms_since(self._t0)}ms")
         self._player.mark_tts_done()
 
     def _on_playback_done(self) -> None:
@@ -204,10 +224,11 @@ class Agent:
         if not self._active:
             return
 
+        self._tracer.mark(self._turn, "agent_turn_done")
         self._tracer.end(self._turn, "player")
 
         total = _ms_since(self._t0)
-        log.info(f"⏱  Turn complete    +{total}ms total")
+        log.info(f"⏱  Agent turn finished  +{total}ms total")
 
         self._active = False
         self._tts = None

@@ -90,6 +90,8 @@ def setup_logging(level: int = logging.INFO) -> None:
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
+    logging.getLogger("twilio").setLevel(logging.WARNING)
+    logging.getLogger("twilio.http_client").setLevel(logging.WARNING)
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -288,6 +290,11 @@ class ServiceLogger:
             self._logger.error(
                 _c(C.RED, "\u2717") + " " + _c(self._color, self._name + ":") + " " + msg
             )
+
+    def warning(self, msg: str) -> None:
+        self._logger.warning(
+            "  " + _c(C.YELLOW, self._name + ":") + " " + _c(C.YELLOW, msg)
+        )
 
     def debug(self, msg: str) -> None:
         self._logger.debug("  " + _c(C.DIM, self._name + ": " + msg))

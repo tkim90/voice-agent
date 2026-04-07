@@ -15,6 +15,14 @@ log = ServiceLogger("LLM")
 SYSTEM_PROMPT = """You are a helpful voice assistant. Keep your responses concise and conversational, as they will be spoken aloud. Avoid using markdown, bullet points, or other formatting that doesn't work well in speech. Be friendly and natural."""
 
 
+def _preview(text: str, limit: int = 120) -> str:
+    """Compact preview for logs."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
 class LLMService:
     """
     OpenAI streaming LLM service.
@@ -54,9 +62,13 @@ class LLMService:
         """Start generating a response."""
         if self._running:
             await self.cancel()
-        
+
+        log.info(
+            f"Starting completion with {len(self._history)} history messages; "
+            f'user="{_preview(user_message, 80)}"'
+        )
         self._history.append({"role": "user", "content": user_message})
-        
+
         self._running = True
         self._task = asyncio.create_task(self._generate())
         log.connected()
@@ -78,12 +90,13 @@ class LLMService:
     async def _generate(self) -> None:
         """Generate response and stream tokens."""
         assistant_response = ""
-        
+        chunk_count = 0
+
         try:
             messages = [
                 {"role": "system", "content": SYSTEM_PROMPT}
             ] + self._history
-            
+
             stream = await self._client.chat.completions.create(
                 model=os.getenv("LLM_MODEL", "llama-3.3-70b-versatile"),
                 messages=messages,
@@ -91,23 +104,35 @@ class LLMService:
                 max_tokens=500,
                 temperature=0.7,
             )
-            
+
             async for chunk in stream:
                 if not self._running:
                     break
-                
+
                 delta = chunk.choices[0].delta if chunk.choices else None
                 if delta and delta.content:
                     token = delta.content
+                    chunk_count += 1
                     assistant_response += token
                     await self._on_token(token)
-            
+
             if self._running and assistant_response:
+                log.info(
+                    f"Completed response ({chunk_count} chunks, {len(assistant_response)} chars): "
+                    f'"{_preview(assistant_response)}"'
+                )
                 self._history.append({"role": "assistant", "content": assistant_response})
                 await self._on_done()
-        
+            elif self._running:
+                log.warning("Stream ended without any assistant text")
+
         except asyncio.CancelledError:
             if assistant_response:
+                log.warning(
+                    f"Cancelled after partial response ({chunk_count} chunks, "
+                    f"{len(assistant_response)} chars): "
+                    f'"{_preview(assistant_response)}"'
+                )
                 self._history.append({"role": "assistant", "content": assistant_response + "..."})
             raise
         
