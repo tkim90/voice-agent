@@ -15,6 +15,21 @@ from ..types import (
 from ..log import Logger
 
 
+def _twilio_client_options() -> dict:
+    """Build Twilio region and edge options, defaulting to US routing."""
+    options = {}
+
+    region = os.getenv("TWILIO_REGION", "us1").strip()
+    edge = os.getenv("TWILIO_EDGE", "ashburn").strip()
+
+    if region:
+        options["region"] = region
+    if edge:
+        options["edge"] = edge
+
+    return options
+
+
 def make_outbound_call(to_number: str) -> str:
     """
     Initiate an outbound call using Twilio.
@@ -33,7 +48,7 @@ def make_outbound_call(to_number: str) -> str:
     if not all([account_sid, auth_token, from_number, public_url]):
         raise ValueError("Missing required Twilio environment variables")
     
-    client = Client(account_sid, auth_token, edge="frankfurt", region="us1")
+    client = Client(account_sid, auth_token, **_twilio_client_options())
     
     twiml_url = f"{public_url}/twiml"
     

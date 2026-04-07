@@ -18,6 +18,53 @@ from ..log import ServiceLogger
 log = ServiceLogger("Flux")
 
 
+def _deepgram_environment(region: Optional[str] = None) -> DeepgramClientEnvironment:
+    """Return a Deepgram endpoint configuration for the requested region."""
+    resolved_region = (region or os.getenv("DEEPGRAM_REGION", "us")).strip().lower()
+
+    if resolved_region in {"us", "default", "global"}:
+        return DeepgramClientEnvironment(
+            base="wss://api.deepgram.com",
+            production="wss://api.deepgram.com",
+            agent="wss://agent.deepgram.com",
+        )
+
+    if resolved_region == "eu":
+        return DeepgramClientEnvironment(
+            base="wss://api.eu.deepgram.com",
+            production="wss://api.eu.deepgram.com",
+            agent="wss://agent.eu.deepgram.com",
+        )
+
+    raise ValueError("DEEPGRAM_REGION must be one of: us, eu")
+
+
+def _deepgram_flux_options(
+    model: Optional[str] = None,
+    language: Optional[str] = None,
+) -> dict:
+    """Return a Flux-compatible listen configuration."""
+    resolved_model = (model or os.getenv("DEEPGRAM_MODEL", "flux-general-en")).strip()
+    resolved_language = (
+        language or os.getenv("DEEPGRAM_LANGUAGE", "en")
+    ).strip().lower().replace("_", "-")
+
+    if not resolved_language:
+        resolved_language = "en"
+
+    if resolved_model != "flux-general-en":
+        raise ValueError("DEEPGRAM_MODEL must be flux-general-en for FluxService")
+
+    if resolved_language not in {"en", "en-us", "en-gb", "english"}:
+        raise ValueError("DEEPGRAM_LANGUAGE must be English for FluxService")
+
+    return {
+        "model": "flux-general-en",
+        "encoding": "mulaw",
+        "sample_rate": 8000,
+    }
+
+
 class FluxService:
     """
     Deepgram Flux streaming service.
@@ -55,20 +102,14 @@ class FluxService:
             return
 
         try:
-            deepgram_eu = DeepgramClientEnvironment(
-                base="wss://api.eu.deepgram.com",
-                production="wss://api.eu.deepgram.com",
-                agent="wss://agent.eu.deepgram.com",
-            )
+            deepgram_env = _deepgram_environment()
             self._client = AsyncDeepgramClient(
                 api_key=self._api_key,
-                environment=deepgram_eu,
+                environment=deepgram_env,
             )
 
             self._cm = self._client.listen.v2.connect(
-                model="flux-general-en",
-                encoding="mulaw",
-                sample_rate=8000,
+                **_deepgram_flux_options()
             )
             self._connection = await self._cm.__aenter__()
 

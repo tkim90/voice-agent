@@ -72,6 +72,10 @@ ngrok http 3040        # in another terminal
 python main.py +1234567890  # Replace with the phone number the code will call
 ```
 
+By default, the sample config now targets US endpoints:
+`DEEPGRAM_REGION=us`, `TWILIO_REGION=us1`, and `TWILIO_EDGE=ashburn`.
+The Deepgram Flux service uses `DEEPGRAM_MODEL=flux-general-en` and English (`DEEPGRAM_LANGUAGE=en`).
+
 ## Tests
 Running these tests is not required for executing the application.
 It is recommended to run tests after making changes to the codebase.
