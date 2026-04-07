@@ -76,6 +76,26 @@ By default, the sample config now targets US endpoints:
 `DEEPGRAM_REGION=us`, `TWILIO_REGION=us1`, and `TWILIO_EDGE=ashburn`.
 The Deepgram Flux service uses `DEEPGRAM_MODEL=flux-general-en` and English (`DEEPGRAM_LANGUAGE=en`).
 
+## LiveKit pt-BR experiment
+
+This repo also now includes a separate LiveKit-based telephony experiment for Brazilian Portuguese:
+
+- Worker: `livekit_ptbr_agent.py`
+- Call dispatcher: `scripts/livekit_dispatch_call.py`
+- Setup notes: `docs/livekit-ptbr-agent.md`
+
+The LiveKit path uses:
+
+- STT: Deepgram Nova-3 with `pt-BR`
+- LLM: Groq `llama-3.3-70b-versatile`
+- TTS: ElevenLabs `eleven_flash_v2_5` with voice `G7ILShrCNLfmS0A37SXS`
+- Turn handling: multilingual turn detection with adaptive interruption handling
+
+The LiveKit worker reads `LIVEKIT_*` model settings so it can coexist with the older Twilio path's `DEEPGRAM_MODEL=flux-general-en` configuration.
+
+For inbound calls to a LiveKit phone number, the worker can answer once your LiveKit number is routed to the agent via a dispatch rule.
+For outbound PSTN calls, LiveKit still requires an outbound SIP trunk ID in addition to your LiveKit project credentials.
+
 ## Tests
 Running these tests is not required for executing the application.
 It is recommended to run tests after making changes to the codebase.
