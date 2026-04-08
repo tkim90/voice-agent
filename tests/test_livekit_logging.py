@@ -2,6 +2,7 @@ import asyncio
 import logging
 from types import SimpleNamespace
 
+import shuo.livekit_logging as livekit_logging
 from shuo.livekit_logging import LiveKitSessionLogger
 
 
@@ -106,3 +107,33 @@ def test_livekit_session_logger_falls_back_to_assistant_item_text(caplog):
     assert "LLM first token  +111ms" in logs
     assert 'Completed response (1 chunks, 22 chars): "Sim, estou te ouvindo."' in logs
     assert 'Text chunk #1 (22 chars) [flush]: "Sim, estou te ouvindo."' in logs
+
+
+def test_livekit_session_logger_writes_per_session_log(tmp_path):
+    original_log_dir = livekit_logging.LOG_DIR
+    livekit_logging.LOG_DIR = tmp_path
+
+    try:
+        session = _FakeSession(history_count=2)
+        logger = LiveKitSessionLogger(room_name="room/alpha")
+        logger.attach_session(session)
+
+        session.callbacks["user_input_transcribed"](
+            SimpleNamespace(transcript="Ola, tudo bem?", is_final=True)
+        )
+        session.callbacks["speech_created"](SimpleNamespace(source="generate_reply"))
+        asyncio.run(logger.text_output.capture_text("Oi, tudo bem?"))
+        logger.text_output.flush()
+        logger._on_playback_started(SimpleNamespace())
+        logger._on_playback_finished(SimpleNamespace(interrupted=False))
+
+        files = list(tmp_path.glob("livekit-room-alpha-*.log"))
+        assert len(files) == 1
+
+        content = files[0].read_text()
+        assert "Phase: LISTENING -> RESPONDING" in content
+        assert 'Agent: User transcript ready for LLM (14 chars): "Ola, tudo bem?"' in content
+        assert 'LLM: Completed response (1 chunks, 13 chars): "Oi, tudo bem?"' in content
+        assert "Agent: TTS stream complete" in content
+    finally:
+        livekit_logging.LOG_DIR = original_log_dir

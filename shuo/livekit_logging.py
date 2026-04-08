@@ -8,7 +8,9 @@ so transcript, LLM, and spoken output logs stay consistent across both agents.
 from __future__ import annotations
 
 import time
+from datetime import datetime
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from livekit.agents import AgentSession
@@ -16,6 +18,8 @@ from livekit.agents.voice.io import TextOutput
 
 from .log import Logger, ServiceLogger, preview_text
 from .types import Phase, ResetAgentTurnAction, StartAgentTurnAction
+
+LOG_DIR = Path("logs")
 
 
 @dataclass
@@ -69,7 +73,7 @@ class LiveKitLogTextOutput(TextOutput):
 class LiveKitSessionLogger:
     """Bridges LiveKit session events into the repo's existing structured logs."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, room_name: str | None = None) -> None:
         self._conversation_log = Logger()
         self._agent_log = ServiceLogger("Agent")
         self._llm_log = ServiceLogger("LLM")
@@ -79,6 +83,41 @@ class LiveKitSessionLogger:
         self._active_turn: _TurnLogState | None = None
         self._text_output = LiveKitLogTextOutput(self)
         self._audio_attached = False
+        self._room_name = room_name or "unknown-room"
+        self._session_log_path = self._build_session_log_path(self._room_name)
+
+    @staticmethod
+    def _slugify(value: str) -> str:
+        cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "-" for ch in value)
+        cleaned = "-".join(part for part in cleaned.split("-") if part)
+        return cleaned or "unknown-room"
+
+    @classmethod
+    def _build_session_log_path(cls, room_name: str) -> Path:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        return LOG_DIR / f"livekit-{cls._slugify(room_name)}-{stamp}.log"
+
+    def _write_session_line(self, line: str) -> None:
+        timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        with self._session_log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"{timestamp} {line}\n")
+
+    def _log_agent(self, message: str) -> None:
+        self._agent_log.info(message)
+        self._write_session_line(f"Agent: {message}")
+
+    def _log_llm(self, message: str) -> None:
+        self._llm_log.info(message)
+        self._write_session_line(f"LLM: {message}")
+
+    def _log_tts(self, message: str) -> None:
+        self._tts_log.info(message)
+        self._write_session_line(f"TTS: {message}")
+
+    def _log_phase(self, old_phase: Phase, new_phase: Phase) -> None:
+        if old_phase != new_phase:
+            self._write_session_line(f"Phase: {old_phase.name} -> {new_phase.name}")
 
     @property
     def text_output(self) -> TextOutput:
@@ -110,7 +149,7 @@ class LiveKitSessionLogger:
 
         turn.first_token_logged = True
         turn.first_token_at = time.monotonic()
-        self._agent_log.info(f"⏱  LLM first token  +{self._elapsed_ms(turn)}ms")
+        self._log_agent(f"⏱  LLM first token  +{self._elapsed_ms(turn)}ms")
 
     def on_llm_text_flush(self, text: str, chunk_count: int) -> None:
         turn = self._active_turn
@@ -123,19 +162,19 @@ class LiveKitSessionLogger:
 
         preview = preview_text(text, 120)
         summary = "Completed response" if not turn.interrupted else "Interrupted response"
-        self._llm_log.info(
+        self._log_llm(
             f'{summary} ({chunk_count} chunks, {len(text)} chars): "{preview}"'
         )
-        self._agent_log.info(
+        self._log_agent(
             f"LLM stream complete  +{self._elapsed_ms(turn)}ms  -> flushing TTS"
         )
 
         turn.tts_chunks_logged += 1
-        self._tts_log.info(
+        self._log_tts(
             f'Text chunk #{turn.tts_chunks_logged} ({len(text)} chars) [flush]: '
             f'"{preview_text(text)}"'
         )
-        self._tts_log.info(f"Starting TTS stream ({len(text)} chars)")
+        self._log_tts(f"Starting TTS stream ({len(text)} chars)")
         turn.llm_output_logged = True
 
     def _start_turn(self, transcript: str) -> None:
@@ -146,10 +185,10 @@ class LiveKitSessionLogger:
         )
         self._set_phase(Phase.RESPONDING)
         self._conversation_log.action(StartAgentTurnAction(transcript=transcript))
-        self._agent_log.info(
+        self._log_agent(
             f'User transcript ready for LLM ({len(transcript)} chars): "{preview_text(transcript)}"'
         )
-        self._llm_log.info(
+        self._log_llm(
             f"Starting completion with {self._active_turn.history_messages} history messages; "
             f'user="{preview_text(transcript, 80)}"'
         )
@@ -162,7 +201,7 @@ class LiveKitSessionLogger:
         turn.interrupted = True
         self._set_phase(Phase.LISTENING)
         self._conversation_log.action(ResetAgentTurnAction())
-        self._agent_log.info(f"Turn cancelled at +{self._elapsed_ms(turn)}ms ({reason})")
+        self._log_agent(f"Turn cancelled at +{self._elapsed_ms(turn)}ms ({reason})")
 
     def _complete_turn(self) -> None:
         turn = self._active_turn
@@ -171,12 +210,13 @@ class LiveKitSessionLogger:
             return
 
         elapsed = self._elapsed_ms(turn)
-        self._agent_log.info(f"TTS stream complete  +{elapsed}ms")
-        self._agent_log.info(f"⏱  Agent turn finished  +{elapsed}ms total")
+        self._log_agent(f"TTS stream complete  +{elapsed}ms")
+        self._log_agent(f"⏱  Agent turn finished  +{elapsed}ms total")
         self._set_phase(Phase.LISTENING)
         self._active_turn = None
 
     def _set_phase(self, phase: Phase) -> None:
+        self._log_phase(self._phase, phase)
         self._conversation_log.transition(self._phase, phase)
         self._phase = phase
 
@@ -221,7 +261,7 @@ class LiveKitSessionLogger:
             return
 
         turn.started_logged = True
-        self._agent_log.info("Turn started")
+        self._log_agent("Turn started")
 
     def _on_conversation_item_added(self, event: Any) -> None:
         item = getattr(event, "item", None)
@@ -240,7 +280,7 @@ class LiveKitSessionLogger:
                 if llm_ttft is not None:
                     turn.first_token_logged = True
                     turn.first_token_at = turn.started_at + float(llm_ttft)
-                    self._agent_log.info(
+                    self._log_agent(
                         f"⏱  LLM first token  +{int(float(llm_ttft) * 1000)}ms"
                     )
 
@@ -259,11 +299,11 @@ class LiveKitSessionLogger:
         elapsed = self._elapsed_ms(turn)
         if turn.first_token_at is not None:
             tts_latency = int((time.monotonic() - turn.first_token_at) * 1000)
-            self._agent_log.info(
+            self._log_agent(
                 f"⏱  TTS first audio  +{elapsed}ms  (TTS latency {tts_latency}ms)"
             )
         else:
-            self._agent_log.info(f"⏱  TTS first audio  +{elapsed}ms")
+            self._log_agent(f"⏱  TTS first audio  +{elapsed}ms")
 
     def _on_playback_finished(self, event: Any) -> None:
         if getattr(event, "interrupted", False):
@@ -276,4 +316,5 @@ class LiveKitSessionLogger:
     def _on_error(self, event: Any) -> None:
         error = getattr(event, "error", None)
         if error is not None:
+            self._write_session_line(f"Agent ERROR: LiveKit session error ({error})")
             self._agent_log.error("LiveKit session error", error)

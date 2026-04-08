@@ -17,7 +17,15 @@ from typing import Any
 
 from dotenv import load_dotenv
 from livekit import api, rtc
-from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, room_io
+from livekit.agents import (
+    Agent,
+    AgentSession,
+    JobContext,
+    JobProcess,
+    WorkerOptions,
+    cli,
+    room_io,
+)
 
 from .livekit_logging import LiveKitSessionLogger
 from .log import compact_livekit_cli_logs, setup_logging
@@ -33,15 +41,38 @@ DEFAULT_GREETING = (
     "e pergunte como voce pode ajudar."
 )
 DEFAULT_INSTRUCTIONS = """
-Voce e um agente de voz para telefonia que conversa em portugues do Brasil.
-Fale sempre em portugues brasileiro, com frases curtas, naturais e faceis de ouvir por telefone.
-Nao use markdown, listas, emojis nem respostas longas.
-Se a pessoa interromper, pare e escute.
-Faca uma pergunta por vez e confirme dados importantes em voz alta.
+Você é o agente de voz oficial do concessionário de automóveis Toriba e apenas responde ligações para a Toriba. Atenda e converse sempre em português brasileiro, com frases curtas, naturais e fáceis de compreender por telefone. Todas as interações devem ser em tom conversacional de atendimento: fale de maneira acolhedora, clara, tranquila e sempre evite respostas longas, listas, emojis, formatações ou qualquer coisa que dificulte a escuta.  
+
+Siga estas diretrizes:
+- Nunca use emojis, listas, markdown, ou textos longos.  
+- Sempre use frases faladas e simples, como em uma conversa ao telefone.  
+- Fale somente em português do Brasil.
+- Se o cliente pedir para soletrar nomes, e-mails ou qualquer informação letra por letra, coloque cada letra entre vírgulas (por exemplo: "S, a, r, a" para "Sara"), nunca utilize traços ou outros separadores.
+- Confirme em voz alta informações importantes com o cliente antes de prosseguir.
+- Caso o cliente interrompa, pare imediatamente de falar e escute antes de continuar.
+- Faça sempre uma pergunta de cada vez, para facilitar o entendimento.
+- Nunca faça menção a outros assuntos fora do contexto da concessionária Toriba.
+- Não utilize termos técnicos complexos, adapte sempre para uma linguagem fácil e acessível.
+- Seja breve, cordial e objetivo.
+
+# Output Format
+
+Responda sempre em português do Brasil, em uma frase curta, objetiva, fácil de entender, e totalmente adequada para uma conversa telefônica — nunca use emojis, listas, markdown, ou respostas longas em nenhum momento.
+
+# Notes
+
+- Se for solicitado para soletrar nomes ou e-mails, sempre insira uma vírgula entre cada letra falada. 
+- Respeite as pausas e interrupções do cliente, escutando atentamente antes de prosseguir.
+- Em situações de dúvida, peça confirmação ao cliente de forma clara e breve.
+- Lembre-se sempre: você é a voz da concessionária Toriba.
+
+[IMPORTANTE: Siga as instruções atentamente para garantir que todas as respostas sejam apropriadas ao contexto de atendimento telefônico para a Toriba, mantendo clareza, simpatia, e obediência às regras acima.]
 """
 
 
-def bootstrap_env(env: MutableMapping[str, str] | None = None) -> MutableMapping[str, str]:
+def bootstrap_env(
+    env: MutableMapping[str, str] | None = None,
+) -> MutableMapping[str, str]:
     """Normalize local env names to the names expected by LiveKit plugins."""
     target = os.environ if env is None else env
 
@@ -67,11 +98,15 @@ def require_env(*names: str, env: MutableMapping[str, str] | None = None) -> str
     value = first_env(*names, env=env)
     if value:
         return value
-    raise RuntimeError(f"Missing required environment variable. Expected one of: {', '.join(names)}")
+    raise RuntimeError(
+        f"Missing required environment variable. Expected one of: {', '.join(names)}"
+    )
 
 
 def outbound_trunk_id(env: MutableMapping[str, str] | None = None) -> str:
-    return require_env("SIP_OUTBOUND_TRUNK_ID", "LIVEKIT_SIP_OUTBOUND_TRUNK_ID", env=env)
+    return require_env(
+        "SIP_OUTBOUND_TRUNK_ID", "LIVEKIT_SIP_OUTBOUND_TRUNK_ID", env=env
+    )
 
 
 def livekit_env(name: str, default: str) -> str:
@@ -86,9 +121,12 @@ def build_elevenlabs_voice_settings() -> Any:
 
     return elevenlabs.VoiceSettings(
         stability=float(livekit_env("LIVEKIT_ELEVENLABS_STABILITY", "0.55")),
-        similarity_boost=float(livekit_env("LIVEKIT_ELEVENLABS_SIMILARITY_BOOST", "0.90")),
+        similarity_boost=float(
+            livekit_env("LIVEKIT_ELEVENLABS_SIMILARITY_BOOST", "0.90")
+        ),
         speed=float(livekit_env("LIVEKIT_ELEVENLABS_SPEED", "0.88")),
-        use_speaker_boost=livekit_env("LIVEKIT_ELEVENLABS_USE_SPEAKER_BOOST", "0") != "0",
+        use_speaker_boost=livekit_env("LIVEKIT_ELEVENLABS_USE_SPEAKER_BOOST", "0")
+        != "0",
     )
 
 
@@ -111,7 +149,11 @@ def build_dispatch_metadata(
 
 class BrazilianPortugueseAssistant(Agent):
     def __init__(self) -> None:
-        super().__init__(instructions=os.getenv("LIVEKIT_AGENT_INSTRUCTIONS", DEFAULT_INSTRUCTIONS).strip())
+        super().__init__(
+            instructions=os.getenv(
+                "LIVEKIT_AGENT_INSTRUCTIONS", DEFAULT_INSTRUCTIONS
+            ).strip()
+        )
 
 
 def prewarm(proc: JobProcess) -> None:
@@ -133,8 +175,11 @@ def build_turn_handling() -> dict[str, Any]:
     interruption: dict[str, Any] = {
         "mode": "adaptive",
         "min_duration": float(os.getenv("LIVEKIT_MIN_INTERRUPTION_DURATION", "0.15")),
-        "resume_false_interruption": os.getenv("LIVEKIT_RESUME_FALSE_INTERRUPTION", "1") != "0",
-        "false_interruption_timeout": float(os.getenv("LIVEKIT_FALSE_INTERRUPTION_TIMEOUT", "2.0")),
+        "resume_false_interruption": os.getenv("LIVEKIT_RESUME_FALSE_INTERRUPTION", "1")
+        != "0",
+        "false_interruption_timeout": float(
+            os.getenv("LIVEKIT_FALSE_INTERRUPTION_TIMEOUT", "2.0")
+        ),
     }
     turn_handling: dict[str, Any] = {
         "endpointing": endpointing,
@@ -183,7 +228,9 @@ def build_session(vad: Any) -> AgentSession:
         llm=groq.LLM(
             model=livekit_env("LIVEKIT_LLM_MODEL", "llama-3.3-70b-versatile"),
             temperature=float(livekit_env("LIVEKIT_LLM_TEMPERATURE", "0.2")),
-            max_completion_tokens=int(livekit_env("LIVEKIT_LLM_MAX_COMPLETION_TOKENS", "256")),
+            max_completion_tokens=int(
+                livekit_env("LIVEKIT_LLM_MAX_COMPLETION_TOKENS", "256")
+            ),
         ),
         tts=elevenlabs.TTS(
             api_key=require_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
@@ -192,7 +239,9 @@ def build_session(vad: Any) -> AgentSession:
             model=livekit_env("LIVEKIT_ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
             language=livekit_env("LIVEKIT_ELEVENLABS_LANGUAGE", "pt"),
             auto_mode=True,
-            streaming_latency=int(livekit_env("LIVEKIT_ELEVENLABS_STREAMING_LATENCY", "4")),
+            streaming_latency=int(
+                livekit_env("LIVEKIT_ELEVENLABS_STREAMING_LATENCY", "4")
+            ),
         ),
         preemptive_generation=True,
         turn_handling=build_turn_handling(),
@@ -223,7 +272,9 @@ def parse_job_metadata(raw_metadata: str) -> dict[str, Any]:
     return data
 
 
-def build_sip_participant_kwargs(room_name: str, metadata: dict[str, Any]) -> dict[str, Any]:
+def build_sip_participant_kwargs(
+    room_name: str, metadata: dict[str, Any]
+) -> dict[str, Any]:
     phone_number = metadata.get("phone_number")
     if not phone_number:
         raise RuntimeError("Dispatch metadata must include phone_number")
@@ -261,14 +312,18 @@ async def entrypoint(ctx: JobContext) -> None:
         session.start(
             agent=BrazilianPortugueseAssistant(),
             room=ctx.room,
-            room_options=build_room_options(next_text_output=session_logger.text_output),
+            room_options=build_room_options(
+                next_text_output=session_logger.text_output
+            ),
         )
     )
 
     try:
         if phone_number:
             await ctx.api.sip.create_sip_participant(
-                api.CreateSIPParticipantRequest(**build_sip_participant_kwargs(ctx.room.name, metadata))
+                api.CreateSIPParticipantRequest(
+                    **build_sip_participant_kwargs(ctx.room.name, metadata)
+                )
             )
 
         await session_started

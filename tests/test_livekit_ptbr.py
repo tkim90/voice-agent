@@ -3,6 +3,7 @@ import json
 from shuo.livekit_ptbr import (
     bootstrap_env,
     build_dispatch_metadata,
+    build_elevenlabs_voice_settings,
     build_sip_participant_kwargs,
     build_turn_handling,
     livekit_env,
@@ -83,3 +84,31 @@ def test_livekit_env_ignores_legacy_global_model_settings(monkeypatch):
     monkeypatch.delenv("LIVEKIT_DEEPGRAM_MODEL", raising=False)
 
     assert livekit_env("LIVEKIT_DEEPGRAM_MODEL", "nova-3") == "nova-3"
+
+
+def test_build_elevenlabs_voice_settings_uses_livekit_defaults(monkeypatch):
+    monkeypatch.delenv("LIVEKIT_ELEVENLABS_STABILITY", raising=False)
+    monkeypatch.delenv("LIVEKIT_ELEVENLABS_SIMILARITY_BOOST", raising=False)
+    monkeypatch.delenv("LIVEKIT_ELEVENLABS_SPEED", raising=False)
+    monkeypatch.delenv("LIVEKIT_ELEVENLABS_USE_SPEAKER_BOOST", raising=False)
+
+    settings = build_elevenlabs_voice_settings()
+
+    assert settings.stability == 0.55
+    assert settings.similarity_boost == 0.90
+    assert settings.speed == 0.88
+    assert settings.use_speaker_boost is False
+
+
+def test_build_elevenlabs_voice_settings_reads_overrides(monkeypatch):
+    monkeypatch.setenv("LIVEKIT_ELEVENLABS_STABILITY", "0.61")
+    monkeypatch.setenv("LIVEKIT_ELEVENLABS_SIMILARITY_BOOST", "0.95")
+    monkeypatch.setenv("LIVEKIT_ELEVENLABS_SPEED", "1.05")
+    monkeypatch.setenv("LIVEKIT_ELEVENLABS_USE_SPEAKER_BOOST", "1")
+
+    settings = build_elevenlabs_voice_settings()
+
+    assert settings.stability == 0.61
+    assert settings.similarity_boost == 0.95
+    assert settings.speed == 1.05
+    assert settings.use_speaker_boost is True
