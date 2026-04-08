@@ -19,7 +19,11 @@ from dotenv import load_dotenv
 from livekit import api, rtc
 from livekit.agents import Agent, AgentSession, JobContext, JobProcess, WorkerOptions, cli, room_io
 
+from .livekit_logging import LiveKitSessionLogger
+from .log import compact_livekit_cli_logs, setup_logging
+
 load_dotenv()
+compact_livekit_cli_logs()
 
 logger = logging.getLogger("shuo.livekit")
 
@@ -183,7 +187,7 @@ def build_session(vad: Any) -> AgentSession:
     )
 
 
-def build_room_options() -> room_io.RoomOptions:
+def build_room_options(*, next_text_output: Any | None = None) -> room_io.RoomOptions:
     from livekit.plugins import noise_cancellation
 
     return room_io.RoomOptions(
@@ -194,6 +198,7 @@ def build_room_options() -> room_io.RoomOptions:
                 else noise_cancellation.BVC()
             ),
         ),
+        text_output=room_io.TextOutputOptions(next_in_chain=next_text_output),
     )
 
 
@@ -238,11 +243,13 @@ async def entrypoint(ctx: JobContext) -> None:
     phone_number = metadata.get("phone_number")
 
     session = build_session(ctx.proc.userdata["vad"])
+    session_logger = LiveKitSessionLogger()
+    session_logger.attach_session(session)
     session_started = asyncio.create_task(
         session.start(
             agent=BrazilianPortugueseAssistant(),
             room=ctx.room,
-            room_options=build_room_options(),
+            room_options=build_room_options(next_text_output=session_logger.text_output),
         )
     )
 
@@ -253,6 +260,7 @@ async def entrypoint(ctx: JobContext) -> None:
             )
 
         await session_started
+        session_logger.attach_output_listeners()
 
         if phone_number:
             await ctx.wait_for_participant(identity=phone_number)
@@ -331,4 +339,6 @@ async def dispatch_outbound_call(
 
 def run_worker() -> None:
     bootstrap_env()
+    setup_logging(install_handler=False)
+    compact_livekit_cli_logs()
     cli.run_app(build_worker_options())

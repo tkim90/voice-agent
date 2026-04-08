@@ -21,7 +21,7 @@ from .services.tts import TTSService
 from .services.tts_pool import TTSPool
 from .services.player import AudioPlayer
 from .tracer import Tracer
-from .log import ServiceLogger
+from .log import ServiceLogger, preview_text
 
 log = ServiceLogger("Agent")
 
@@ -29,15 +29,6 @@ log = ServiceLogger("Agent")
 def _ms_since(t0: float) -> int:
     """Milliseconds elapsed since t0."""
     return int((time.monotonic() - t0) * 1000)
-
-
-def _preview(text: str, limit: int = 80) -> str:
-    """Compact preview for logs."""
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
 
 class Agent:
     """
@@ -102,7 +93,7 @@ class Agent:
 
         log.info(
             f"User transcript ready for LLM ({len(transcript)} chars): "
-            f'"{_preview(transcript)}"'
+            f'"{preview_text(transcript)}"'
         )
         self._active = True
         self._t0 = time.monotonic()

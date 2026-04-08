@@ -60,6 +60,14 @@ def _quote(text: str, color: str = C.WHITE) -> str:
     return _c(color, '"' + text + '"')
 
 
+def preview_text(text: str, limit: int = 80) -> str:
+    """Compact single-line preview for logs."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3] + "..."
+
+
 # =============================================================================
 # LOGGING SETUP
 # =============================================================================
@@ -75,23 +83,166 @@ class ColorFormatter(logging.Formatter):
         return time_str + " \u2502 " + record.getMessage()
 
 
-def setup_logging(level: int = logging.INFO) -> None:
-    """Configure logging for the application."""
-    console = logging.StreamHandler(sys.stdout)
-    console.setFormatter(ColorFormatter())
-    console.setLevel(level)
-
+def _quiet_noisy_loggers() -> None:
+    """Reduce noise from dependency loggers."""
     root = logging.getLogger()
-    root.setLevel(level)
-    root.handlers = [console]
-
-    # Quiet noisy libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("twilio").setLevel(logging.WARNING)
     logging.getLogger("twilio.http_client").setLevel(logging.WARNING)
+
+
+def setup_logging(level: int = logging.INFO, *, install_handler: bool = True) -> None:
+    """Configure logging for the application."""
+    root = logging.getLogger()
+    root.setLevel(level)
+
+    if install_handler:
+        console = logging.StreamHandler(sys.stdout)
+        console.setFormatter(ColorFormatter())
+        console.setLevel(level)
+        root.handlers = [console]
+
+    _quiet_noisy_loggers()
+
+
+def compact_livekit_cli_logs() -> None:
+    """Patch LiveKit's rich logger to avoid fixed-width message indentation."""
+    try:
+        from livekit.agents.cli import cli as livekit_cli
+    except ImportError:
+        return
+
+    handler_cls = livekit_cli.RichLoggingHandler
+    if getattr(handler_cls, "_shuo_compact_logs", False):
+        return
+
+    def emit(self, record: logging.LogRecord) -> None:
+        def middle_truncate(text: str, max_width: int) -> str:
+            if len(text) <= max_width:
+                return text
+            if max_width <= 1:
+                return "…"[:max_width]
+            visible = max_width - 1
+            left = visible // 2
+            right = visible - left
+            return text[:left] + "…" + text[-right:]
+
+        has_exc = bool(
+            (record.exc_info and record.exc_info != (None, None, None)) or record.exc_text
+        )
+
+        if has_exc:
+            exc_info, exc_text = record.exc_info, record.exc_text
+            record.exc_info = None
+            record.exc_text = None
+            try:
+                message = self.format(record)
+            finally:
+                record.exc_info, record.exc_text = exc_info, exc_text
+        else:
+            message = self.format(record)
+
+        max_name_width = 18
+
+        output = livekit_cli.Table.grid(padding=(0, 1))
+        output.add_column(style="log.time")
+        output.add_column(style="log.level", width=6, no_wrap=True)
+        output.add_column(
+            style="log.name",
+            max_width=max_name_width,
+            no_wrap=True,
+            overflow="ellipsis",
+        )
+        output.add_column(ratio=1, style="log.message")
+        output.add_column(style="log.extra", no_wrap=True)
+
+        row = []
+
+        time_format = None if self.formatter is None else self.formatter.datefmt
+        log_time = livekit_cli.datetime.datetime.fromtimestamp(record.created)
+        log_time = log_time or self.c.console.get_datetime()
+
+        log_time_display = (
+            livekit_cli.Text(log_time.strftime(time_format))
+            if time_format
+            else livekit_cli.Text(log_time.strftime("%H:%M:%S.%f")[:-3])
+        )
+
+        if log_time_display == self._last_time:
+            time_str = log_time_display.plain
+            row.append(livekit_cli.Text(" " * len(time_str)))
+        else:
+            row.append(log_time_display)
+            self._last_time = log_time_display
+
+        level_text = livekit_cli.Text.styled(
+            record.levelname.ljust(8),
+            f"logging.level.{record.levelname.lower()}",
+        )
+        row.append(level_text)
+
+        logger_name = middle_truncate(record.name, max_name_width)
+        name_text = livekit_cli.Text(logger_name)
+        row.append(name_text)
+
+        msg_text = livekit_cli.Text(message)
+        row.append(msg_text)
+
+        console_width = self.c.console.width
+        available_width = max(console_width - 6, 20)
+
+        time_len = log_time_display.cell_len
+        level_len = 8
+        name_len = name_text.cell_len
+        msg_len = msg_text.cell_len
+
+        extra = {}
+        livekit_cli._merge_record_extra(record, extra)
+
+        extra_str = ""
+        extra_len = 0
+        if extra:
+            extra_str = livekit_cli.json.dumps(
+                extra,
+                cls=livekit_cli.JsonFormatter.JsonEncoder,
+                ensure_ascii=False,
+            )
+            extra_text = livekit_cli.Text(extra_str)
+            extra_len = extra_text.cell_len
+
+        spaces_between_columns = 4
+        total_len_with_extra = (
+            time_len + level_len + name_len + msg_len + extra_len + spaces_between_columns
+        )
+
+        inline_extra = bool(extra_str) and total_len_with_extra <= available_width
+
+        if inline_extra:
+            row.append(livekit_cli.Text(extra_str, style="log.extra"))
+        else:
+            row.append(livekit_cli.Text(" "))
+
+        output.add_row(*row)
+
+        try:
+            self.c.console.print(output)
+
+            if extra_str and not inline_extra:
+                indent_width = time_len + 1 + level_len + 1 + name_len + 1
+                indent = " " * (indent_width + 2)
+                extra_line = livekit_cli.Text(indent + extra_str, style="log.extra")
+                self.c.console.print(extra_line)
+
+            if has_exc:
+                self._print_plain_traceback(record)
+        except Exception:
+            self.handleError(record)
+
+    handler_cls.emit = emit
+    handler_cls._shuo_compact_logs = True
 
 
 def get_logger(name: str) -> logging.Logger:
@@ -293,11 +444,11 @@ class ServiceLogger:
 
     def warning(self, msg: str) -> None:
         self._logger.warning(
-            "  " + _c(C.YELLOW, self._name + ":") + " " + _c(C.YELLOW, msg)
+            _c(C.YELLOW, self._name + ":") + " " + _c(C.YELLOW, msg)
         )
 
     def debug(self, msg: str) -> None:
-        self._logger.debug("  " + _c(C.DIM, self._name + ": " + msg))
+        self._logger.debug(_c(C.DIM, self._name + ": " + msg))
 
     def info(self, msg: str) -> None:
-        self._logger.info("  " + _c(self._color, self._name + ":") + " " + msg)
+        self._logger.info(_c(self._color, self._name + ":") + " " + msg)

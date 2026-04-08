@@ -31,8 +31,8 @@ logger = get_logger("shuo.server")
 app = FastAPI(title="shuo", docs_url=None, redoc_url=None)
 
 # ── Graceful shutdown / connection draining ───────────────────────────
-_draining = False          # Set True on SIGTERM — reject new calls
-_active_calls = 0          # Count of live WebSocket conversations
+_draining = False  # Set True on SIGTERM — reject new calls
+_active_calls = 0  # Count of live WebSocket conversations
 _drain_event = asyncio.Event()  # Signalled when _active_calls hits 0
 
 
@@ -46,7 +46,7 @@ async def health():
 async def twiml():
     """
     Return TwiML instructing Twilio to connect a WebSocket stream.
-    
+
     Twilio calls this URL when the call is answered.
     During graceful shutdown, rejects new calls so they don't get cut off.
     """
@@ -63,14 +63,14 @@ async def twiml():
     public_url = os.getenv("TWILIO_PUBLIC_URL", "")
     ws_url = public_url.replace("https://", "wss://").replace("http://", "ws://")
     ws_url = f"{ws_url}/ws"
-    
+
     twiml_response = f"""<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Connect record="record-from-answer-dual">
         <Stream url="{ws_url}" track="inbound_track" />
     </Connect>
 </Response>"""
-    
+
     return Response(content=twiml_response, media_type="application/xml")
 
 
@@ -81,7 +81,9 @@ async def latest_trace():
     if not trace_dir.exists():
         return JSONResponse({"error": "No traces found"}, status_code=404)
 
-    traces = sorted(trace_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    traces = sorted(
+        trace_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True
+    )
     if not traces:
         return JSONResponse({"error": "No traces found"}, status_code=404)
 
@@ -114,20 +116,20 @@ BENCH_PROMPT = "Explain how a combustion engine works."
 # provider_key is used to look up the right AsyncOpenAI client
 DEFAULT_MODELS = [
     # OpenAI 4-series
-    ("gpt-4o-mini",   "openai", "gpt-4o-mini"),
-    ("gpt-4o",        "openai", "gpt-4o"),
-    ("gpt-4.1-nano",  "openai", "gpt-4.1-nano"),
-    ("gpt-4.1-mini",  "openai", "gpt-4.1-mini"),
-    ("gpt-4.1",       "openai", "gpt-4.1"),
+    ("gpt-4o-mini", "openai", "gpt-4o-mini"),
+    ("gpt-4o", "openai", "gpt-4o"),
+    ("gpt-4.1-nano", "openai", "gpt-4.1-nano"),
+    ("gpt-4.1-mini", "openai", "gpt-4.1-mini"),
+    ("gpt-4.1", "openai", "gpt-4.1"),
     # OpenAI 5-series
-    ("gpt-5-nano",    "openai", "gpt-5-nano"),
-    ("gpt-5-mini",    "openai", "gpt-5-mini"),
-    ("gpt-5",         "openai", "gpt-5"),
-    ("gpt-5.1",       "openai", "gpt-5.1"),
-    ("gpt-5.2",       "openai", "gpt-5.2"),
+    ("gpt-5-nano", "openai", "gpt-5-nano"),
+    ("gpt-5-mini", "openai", "gpt-5-mini"),
+    ("gpt-5", "openai", "gpt-5"),
+    ("gpt-5.1", "openai", "gpt-5.1"),
+    ("gpt-5.2", "openai", "gpt-5.2"),
     # Groq
-    ("groq/llama-3.3-70b",  "groq", "llama-3.3-70b-versatile"),
-    ("groq/llama-3.1-8b",   "groq", "llama-3.1-8b-instant"),
+    ("groq/llama-3.3-70b", "groq", "llama-3.3-70b-versatile"),
+    ("groq/llama-3.1-8b", "groq", "llama-3.1-8b-instant"),
 ]
 
 BENCH_MESSAGES = [
@@ -196,7 +198,6 @@ async def _measure_ttft(client: AsyncOpenAI, model: str) -> float:
     return (time.perf_counter() - t0) * 1000
 
 
-
 @app.get("/bench/ttft")
 async def bench_ttft(
     models: Optional[str] = Query(
@@ -231,15 +232,21 @@ async def bench_ttft(
         model_entries = DEFAULT_MODELS
 
     # Filter out models whose provider has no API key
-    model_entries = [(name, prov, mid) for name, prov, mid in model_entries if prov in clients]
+    model_entries = [
+        (name, prov, mid) for name, prov, mid in model_entries if prov in clients
+    ]
 
     # Build a shuffled schedule: each model appears `runs` times, interleaved
-    schedule = [(name, prov, mid, i) for name, prov, mid in model_entries for i in range(runs)]
+    schedule = [
+        (name, prov, mid, i) for name, prov, mid in model_entries for i in range(runs)
+    ]
     random.shuffle(schedule)
 
     total = len(schedule)
     names = [name for name, _, _ in model_entries]
-    logger.info(f"TTFT benchmark: {len(model_entries)} models × {runs} runs = {total} calls (randomised)")
+    logger.info(
+        f"TTFT benchmark: {len(model_entries)} models × {runs} runs = {total} calls (randomised)"
+    )
 
     times_by_model: dict[str, list[float]] = defaultdict(list)
     errors_by_model: dict[str, list[str]] = defaultdict(list)
@@ -248,10 +255,10 @@ async def bench_ttft(
         try:
             ms = await _measure_ttft(clients[prov], mid)
             times_by_model[name].append(round(ms, 1))
-            logger.info(f"  [{idx}/{total}] {name} #{run_i+1} → {ms:.0f} ms")
+            logger.info(f"  [{idx}/{total}] {name} #{run_i + 1} → {ms:.0f} ms")
         except Exception as e:
-            errors_by_model[name].append(f"run {run_i+1}: {e}")
-            logger.info(f"  [{idx}/{total}] {name} #{run_i+1} → ERROR")
+            errors_by_model[name].append(f"run {run_i + 1}: {e}")
+            logger.info(f"  [{idx}/{total}] {name} #{run_i + 1} → ERROR")
 
     # Aggregate stats per model (preserve original order)
     results = []
@@ -276,18 +283,20 @@ async def bench_ttft(
         results.append(entry)
         logger.info(f"  {name} → avg {avg} ms  (min {min(t)}, max {max(t)})")
 
-    return JSONResponse({
-        "prompt": BENCH_PROMPT,
-        "runs_per_model": runs,
-        "results": results,
-    })
+    return JSONResponse(
+        {
+            "prompt": BENCH_PROMPT,
+            "runs_per_model": runs,
+            "results": results,
+        }
+    )
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     """
     WebSocket endpoint for Twilio Media Streams.
-    
+
     Handles the bidirectional audio stream for a single call.
     Tracks active connections for graceful shutdown draining.
     """
@@ -306,3 +315,4 @@ async def websocket_endpoint(websocket: WebSocket):
         logger.info(f"Call ended  (active: {_active_calls})")
         if _draining and _active_calls <= 0:
             _drain_event.set()
+

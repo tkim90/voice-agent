@@ -14,20 +14,11 @@ from typing import Optional, Callable, Awaitable
 
 import httpx
 
-from ..log import ServiceLogger
+from ..log import ServiceLogger, preview_text
 
 log = ServiceLogger("TTS")
 
 TWILIO_FRAME_BYTES = 160  # 20ms of ulaw_8000 mono audio
-
-
-def _preview(text: str, limit: int = 80) -> str:
-    """Compact preview for logs."""
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
 
 class TTSService:
     """
@@ -50,7 +41,7 @@ class TTSService:
         self._running = False
 
         self._api_key = os.getenv("ELEVENLABS_API_KEY", "")
-        self._voice_id = os.getenv("ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM")
+        self._voice_id = os.getenv("ELEVENLABS_VOICE_ID", "GDzHdQOi6jjf8zaXhCYD")
         self._model_id = os.getenv("ELEVENLABS_MODEL_ID", "eleven_flash_v2_5")
 
         self._pending_text = ""
@@ -124,7 +115,7 @@ class TTSService:
 
         self._sent_chunks = 1
         self._sent_chars = len(text)
-        self._last_text_preview = _preview(text)
+        self._last_text_preview = preview_text(text)
 
         log.info(
             f'Text chunk #1 ({self._sent_chars} chars) [flush]: '
@@ -225,7 +216,7 @@ class TTSService:
 
                     log.error(
                         "HTTP TTS request failed "
-                        f"(status={response.status_code}, body={_preview(body, 160)})"
+                        f"(status={response.status_code}, body={preview_text(body, 160)})"
                     )
                     if guidance:
                         log.warning(guidance)

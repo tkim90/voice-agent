@@ -8,20 +8,11 @@ from typing import Optional, Callable, Awaitable, List, Dict
 
 from openai import AsyncOpenAI
 
-from ..log import ServiceLogger
+from ..log import ServiceLogger, preview_text
 
 log = ServiceLogger("LLM")
 
 SYSTEM_PROMPT = """You are a helpful voice assistant. Keep your responses concise and conversational, as they will be spoken aloud. Avoid using markdown, bullet points, or other formatting that doesn't work well in speech. Be friendly and natural."""
-
-
-def _preview(text: str, limit: int = 120) -> str:
-    """Compact preview for logs."""
-    text = " ".join(text.split())
-    if len(text) <= limit:
-        return text
-    return text[: limit - 3] + "..."
-
 
 class LLMService:
     """
@@ -65,7 +56,7 @@ class LLMService:
 
         log.info(
             f"Starting completion with {len(self._history)} history messages; "
-            f'user="{_preview(user_message, 80)}"'
+            f'user="{preview_text(user_message, 80)}"'
         )
         self._history.append({"role": "user", "content": user_message})
 
@@ -119,7 +110,7 @@ class LLMService:
             if self._running and assistant_response:
                 log.info(
                     f"Completed response ({chunk_count} chunks, {len(assistant_response)} chars): "
-                    f'"{_preview(assistant_response)}"'
+                    f'"{preview_text(assistant_response, 120)}"'
                 )
                 self._history.append({"role": "assistant", "content": assistant_response})
                 await self._on_done()
@@ -131,7 +122,7 @@ class LLMService:
                 log.warning(
                     f"Cancelled after partial response ({chunk_count} chunks, "
                     f"{len(assistant_response)} chars): "
-                    f'"{_preview(assistant_response)}"'
+                    f'"{preview_text(assistant_response, 120)}"'
                 )
                 self._history.append({"role": "assistant", "content": assistant_response + "..."})
             raise
