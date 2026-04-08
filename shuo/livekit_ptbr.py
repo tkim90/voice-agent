@@ -81,6 +81,17 @@ def livekit_env(name: str, default: str) -> str:
     return default
 
 
+def build_elevenlabs_voice_settings() -> Any:
+    from livekit.plugins import elevenlabs
+
+    return elevenlabs.VoiceSettings(
+        stability=float(livekit_env("LIVEKIT_ELEVENLABS_STABILITY", "0.55")),
+        similarity_boost=float(livekit_env("LIVEKIT_ELEVENLABS_SIMILARITY_BOOST", "0.90")),
+        speed=float(livekit_env("LIVEKIT_ELEVENLABS_SPEED", "0.88")),
+        use_speaker_boost=livekit_env("LIVEKIT_ELEVENLABS_USE_SPEAKER_BOOST", "0") != "0",
+    )
+
+
 def build_dispatch_metadata(
     phone_number: str,
     *,
@@ -177,6 +188,7 @@ def build_session(vad: Any) -> AgentSession:
         tts=elevenlabs.TTS(
             api_key=require_env("ELEVENLABS_API_KEY", "ELEVEN_API_KEY"),
             voice_id=livekit_env("LIVEKIT_ELEVENLABS_VOICE_ID", "G7ILShrCNLfmS0A37SXS"),
+            voice_settings=build_elevenlabs_voice_settings(),
             model=livekit_env("LIVEKIT_ELEVENLABS_MODEL_ID", "eleven_flash_v2_5"),
             language=livekit_env("LIVEKIT_ELEVENLABS_LANGUAGE", "pt"),
             auto_mode=True,
@@ -243,7 +255,7 @@ async def entrypoint(ctx: JobContext) -> None:
     phone_number = metadata.get("phone_number")
 
     session = build_session(ctx.proc.userdata["vad"])
-    session_logger = LiveKitSessionLogger()
+    session_logger = LiveKitSessionLogger(room_name=ctx.room.name)
     session_logger.attach_session(session)
     session_started = asyncio.create_task(
         session.start(

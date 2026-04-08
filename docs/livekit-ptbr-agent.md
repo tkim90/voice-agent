@@ -35,6 +35,9 @@ Recommended model values:
 - `LIVEKIT_LLM_MODEL=llama-3.3-70b-versatile`
 - `LIVEKIT_ELEVENLABS_MODEL_ID=eleven_flash_v2_5`
 - `LIVEKIT_ELEVENLABS_VOICE_ID=G7ILShrCNLfmS0A37SXS`
+- `LIVEKIT_ELEVENLABS_SPEED=0.88`
+- `LIVEKIT_ELEVENLABS_STABILITY=0.55`
+- `LIVEKIT_ELEVENLABS_SIMILARITY_BOOST=0.90`
 
 The LiveKit worker intentionally uses `LIVEKIT_*` model settings so it does not inherit the older Twilio-path settings such as `DEEPGRAM_MODEL=flux-general-en`.
 
